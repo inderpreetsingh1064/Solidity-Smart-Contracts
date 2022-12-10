@@ -64,11 +64,13 @@ contract Bidding is AccessControl, Pausable {
 
     address payable public highestBidder;
     uint public highestBid;
+    uint private _tokenId;
 
     function depositPrize(address _nftAddress, uint tokenId) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(isPrizeDeposited == false, "Prize is already deposited");
         require(_nftAddress != address(0), "Zero address is not allowed");
         nft = IERC721(_nftAddress);
+        _tokenId = tokenId;
         isPrizeDeposited = true;
         nft.safeTransferFrom(msg.sender, address(this), tokenId);
         emit PrizeDeposited(msg.sender, address(nft), tokenId);
@@ -95,29 +97,36 @@ contract Bidding is AccessControl, Pausable {
     function bid(uint amount) external onlyOnRunningAuction onlyAfterPrizeDeposited {
         require(tx.origin == msg.sender, "Contract not allowed to bid");
         require(amount > highestBid + minBidAmount, "Bid must be higher than highest bidder");
+        require(paymentToken.allowance(msg.sender, address(this)) >= amount, "Bidding contract is not approved to spend amount");
 
         Bid memory newBid = Bid({
             bidder: msg.sender,
             amount: amount,
             timestamp: block.timestamp
-        }); 
+        });
 
         biddings[msg.sender] = newBid;
 
         if (highestBid != 0) {
-            delete biddings[highestBidder];
+            // delete biddings[highestBidder];
             paymentToken.transferFrom(address(this), highestBidder, amount);
             emit BidRefunded(highestBidder, address(paymentToken), amount);
         }
 
         paymentToken.transferFrom(msg.sender, address(this), amount);
 
-        emit BidRefunded(msg.sender, address(paymentToken), amount);
+        highestBidder = payable(msg.sender);
+        highestBid = amount;
+        emit BidAdded(msg.sender, address(paymentToken), amount);
     }
 
-    // pending
     function processAuction() external onlyAfterAuctionEnded onlyAfterPrizeDeposited onlyRole(DEFAULT_ADMIN_ROLE) {
-
+        require(auctionProcessed == false, "Auction has already been processed");
+        address winner = (highestBidder == address(0)) ? address(beneficiary) : address(highestBidder);
+        nft.approve(winner, _tokenId);
+        nft.safeTransferFrom(address(this), winner, _tokenId);
+        auctionProcessed = true;
+        emit AuctionProcessed(winner, address(nft), _tokenId);
     }
 
     function withdraw(uint amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
